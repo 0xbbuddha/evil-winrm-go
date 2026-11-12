@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="evil-winrm-go" width="240">
+</p>
+
 # evil-winrm-go
 
 A Go reimplementation of [evil-winrm](https://github.com/Hackplayers/evil-winrm): a
