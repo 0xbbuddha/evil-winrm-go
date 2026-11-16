@@ -19,6 +19,9 @@ import (
 	"github.com/0xbbuddha/evil-winrm-go/internal/winrm"
 )
 
+// version is overwritten at build time by GoReleaser's ldflags.
+var version = "dev"
+
 const banner = `
 ▄███▄      ▄   ▄█ █           ▄ ▄   ▄█    ▄   █▄▄▄▄ █▀▄▀█       ▄▀  ████▄
 █▀   ▀      █  ██ █          █   █  ██     █  █  ▄▀ █ █ █     ▄▀    █   █
@@ -51,12 +54,18 @@ func main() {
 		certFile = flag.String("cert", "", "client certificate PEM (requires -S)")
 		keyFile  = flag.String("key", "", "client private key PEM (requires -S)")
 		caFile   = flag.String("cacert", "", "CA certificate PEM used to verify the server")
+		showVer  = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "%s\n\nUsage: %s -i <host> [-u <user>] [-p <pass> | -H <hash> | -kerberos | -cert <pem>] [flags]\n\nFlags:\n", banner, os.Args[0])
 		printFlags()
 	}
 	flag.Parse()
+
+	if *showVer {
+		fmt.Println("evil-winrm-go", version)
+		return
+	}
 
 	if *targets == "" && *host == "" {
 		flag.Usage()

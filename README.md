@@ -23,6 +23,12 @@ static binary, no Ruby/Python runtime, faster startup, and easy cross-compilatio
 - One-shot command mode (`-c`) and a parallel multi-host mode (`-targets`)
 - Single static binary
 
+## Install
+
+Prebuilt binaries for Linux, Windows and macOS (amd64/arm64) are attached to
+each [release](https://github.com/0xbbuddha/evil-winrm-go/releases). Download
+the archive for your platform, extract it and run `evil-winrm-go`.
+
 ## Build
 
 ```bash
