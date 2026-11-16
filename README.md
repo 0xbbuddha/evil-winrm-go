@@ -18,7 +18,8 @@ static binary, no Ruby/Python runtime, faster startup, and easy cross-compilatio
 - One `powershell.exe` for the whole session: variables, functions and the working directory survive, starting in Documents
 - Tab completion of command names, of local paths for `upload` and `script`, and of remote paths otherwise
 - Load a local `.ps1` file or directory into that process (`-s` / `script`)
-- Built-in menu: `upload`, `download`, `script`, `services`, `menu`, `exit`
+- In-memory .NET assembly execution (`invoke-binary`) and AMSI patching (`bypass-4msi`)
+- Built-in menu: `upload`, `download`, `script`, `invoke-binary`, `bypass-4msi`, `services`, `menu`, `exit`
 - One-shot command mode (`-c`) and a parallel multi-host mode (`-targets`)
 - Single static binary
 
@@ -88,6 +89,8 @@ CGO_ENABLED=0 go build -ldflags="-s -w" -o evil-winrm-go .
 upload <local> [remote]     Upload a file to the target
 download <remote> [local]   Download a file from the target
 script <local.ps1 | dir>    Load a local script into the session
+invoke-binary <exe> [args]  Run a local .NET assembly in memory (fileless)
+bypass-4msi                 Patch AMSI in the session process
 services                    List services with their binary paths
 menu                        Show the menu
 exit | quit                 Close the session

