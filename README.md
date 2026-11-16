@@ -74,6 +74,7 @@ CGO_ENABLED=0 go build -ldflags="-s -w" -o evil-winrm-go .
 | `-targets` | File of hosts to run `-c` against, one per line (`host`, `host:port`, or `[ipv6]:port`) |
 | `-threads` | Parallel connections for `-targets` (default 8) |
 | `-s` | Local `.ps1` file or directory to load into the session |
+| `-l` | Append the session transcript (commands and output) to a file |
 | `-kerberos` | Authenticate with Kerberos |
 | `-realm` | Kerberos realm |
 | `-spn` | Kerberos SPN (default `HTTP/<host>`) |
