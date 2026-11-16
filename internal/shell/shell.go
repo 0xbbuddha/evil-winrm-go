@@ -85,6 +85,10 @@ func (s *Shell) dispatch(ctx context.Context, line string) (stop bool) {
 		s.runRemote(ctx, servicesPS)
 	case "script":
 		s.handleScript(ctx, fields[1:])
+	case "invoke-binary":
+		s.handleInvokeBinary(ctx, fields[1:])
+	case "bypass-4msi":
+		s.handleBypassAMSI(ctx)
 	default:
 		s.runRemote(ctx, line)
 	}
@@ -163,12 +167,51 @@ func (s *Shell) handleScript(ctx context.Context, args []string) {
 	s.out.Successf("loaded %s", args[0])
 }
 
+func (s *Shell) handleInvokeBinary(ctx context.Context, args []string) {
+	if len(args) < 1 {
+		s.out.Warnf("usage: invoke-binary <local.exe> [args...]")
+		return
+	}
+	s.out.Infof("running %s in memory ...", args[0])
+	out, err := s.client.InvokeBinary(ctx, args[0], args[1:])
+	if out != "" {
+		fmt.Print(out)
+		if !strings.HasSuffix(out, "\n") {
+			fmt.Println()
+		}
+	}
+	if err != nil {
+		s.out.Errorf("invoke-binary failed: %v", err)
+	}
+}
+
+func (s *Shell) handleBypassAMSI(ctx context.Context) {
+	out, err := s.client.BypassAMSI(ctx)
+	// The patch prints "AMSI patched" only if it ran to the end. Anything else
+	// (an AV block, a reflection error) means it did not take, so report that
+	// rather than claiming success.
+	if err == nil && strings.Contains(out, "AMSI patched") {
+		s.out.Successf("AMSI patched")
+		return
+	}
+	msg := strings.TrimSpace(out)
+	if err != nil {
+		msg = err.Error()
+	}
+	if msg == "" {
+		msg = "no response"
+	}
+	s.out.Errorf("bypass-4msi failed: %s", msg)
+}
+
 func (s *Shell) printMenu() {
 	fmt.Println(`
 evil-winrm-go menu:
   upload <local> [remote]       Upload a file to the target
   download <remote> [local]     Download a file from the target
   script <local.ps1 | dir>      Dot-source a local script into the session
+  invoke-binary <exe> [args]    Run a local .NET assembly in memory
+  bypass-4msi                   Patch AMSI in the session process
   services                      List services and their binary paths
   menu                          Show this menu
   exit | quit                   Close the session

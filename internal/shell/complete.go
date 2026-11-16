@@ -11,7 +11,7 @@ import (
 	"github.com/0xbbuddha/evil-winrm-go/internal/winrm"
 )
 
-var builtins = []string{"upload", "download", "script", "services", "menu", "exit", "quit", "cd"}
+var builtins = []string{"upload", "download", "script", "invoke-binary", "bypass-4msi", "services", "menu", "exit", "quit", "cd"}
 
 // completer finishes command names, local paths for upload/script, and remote
 // paths for everything else that looks like a filesystem argument.
@@ -28,7 +28,7 @@ func (c *completer) Do(line []rune, pos int) ([][]rune, int) {
 	switch {
 	case argN == 0:
 		return suffixes(token, filterPrefix(builtins, token)), pos
-	case (command == "upload" || command == "script") && argN == 1:
+	case (command == "upload" || command == "script" || command == "invoke-binary") && argN == 1:
 		return suffixes(token, localPaths(token)), pos
 	default:
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
