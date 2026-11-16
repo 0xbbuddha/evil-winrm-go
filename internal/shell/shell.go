@@ -63,6 +63,7 @@ func (s *Shell) Run(ctx context.Context) error {
 		if line == "" {
 			continue
 		}
+		s.out.LogCommand(s.client.Path(), line)
 		if stop := s.dispatch(ctx, line); stop {
 			return nil
 		}
@@ -98,12 +99,7 @@ func (s *Shell) dispatch(ctx context.Context, line string) (stop bool) {
 // runRemote executes a PowerShell command remotely and prints its output.
 func (s *Shell) runRemote(ctx context.Context, cmd string) {
 	out, err := s.client.RunPS(ctx, cmd)
-	if out != "" {
-		fmt.Print(out)
-		if !strings.HasSuffix(out, "\n") {
-			fmt.Println()
-		}
-	}
+	s.out.Output(out)
 	if err != nil {
 		s.out.Errorf("%v", err)
 	}
@@ -154,12 +150,7 @@ func (s *Shell) handleScript(ctx context.Context, args []string) {
 	}
 	s.out.Infof("loading %s ...", args[0])
 	out, err := s.client.LoadScripts(ctx, args[0])
-	if out != "" {
-		fmt.Print(out)
-		if !strings.HasSuffix(out, "\n") {
-			fmt.Println()
-		}
-	}
+	s.out.Output(out)
 	if err != nil {
 		s.out.Errorf("script failed: %v", err)
 		return
@@ -174,12 +165,7 @@ func (s *Shell) handleInvokeBinary(ctx context.Context, args []string) {
 	}
 	s.out.Infof("running %s in memory ...", args[0])
 	out, err := s.client.InvokeBinary(ctx, args[0], args[1:])
-	if out != "" {
-		fmt.Print(out)
-		if !strings.HasSuffix(out, "\n") {
-			fmt.Println()
-		}
-	}
+	s.out.Output(out)
 	if err != nil {
 		s.out.Errorf("invoke-binary failed: %v", err)
 	}

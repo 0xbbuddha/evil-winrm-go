@@ -42,6 +42,7 @@ func main() {
 		targets  = flag.String("targets", "", "file of hosts (one per line) to run -c against")
 		threads  = flag.Int("threads", 8, "parallel connections for -targets")
 		scripts  = flag.String("s", "", "local .ps1 file or directory to dot-source after connect")
+		logFile  = flag.String("l", "", "append the session transcript to a file")
 		kerberos = flag.Bool("kerberos", false, "authenticate with Kerberos")
 		realm    = flag.String("realm", "", "Kerberos realm")
 		spn      = flag.String("spn", "", "Kerberos SPN (default HTTP/<host>)")
@@ -97,6 +98,16 @@ func main() {
 	}
 
 	out := output.New()
+	if *logFile != "" {
+		f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(2)
+		}
+		defer f.Close()
+		fmt.Fprintf(f, "\n===== evil-winrm-go %s =====\n", time.Now().Format(time.RFC3339))
+		out.LogTo(f)
+	}
 	out.Banner(banner)
 
 	if *targets != "" {
@@ -162,10 +173,7 @@ func run(cfg winrm.Config, out *output.Printer, oneShot, scripts string) error {
 			return fmt.Errorf("%s", winrm.Explain(err))
 		}
 		out.Successf("authenticated as %s", client.Identity())
-		fmt.Print(o)
-		if o != "" && !strings.HasSuffix(o, "\n") {
-			fmt.Println()
-		}
+		out.Output(o)
 		return nil
 	}
 	if err := client.InitPath(ctx); err != nil {
@@ -176,9 +184,7 @@ func run(cfg winrm.Config, out *output.Printer, oneShot, scripts string) error {
 	if scripts != "" {
 		out.Infof("loading %s", scripts)
 		o, err := client.LoadScripts(ctx, scripts)
-		if o != "" {
-			fmt.Print(o)
-		}
+		out.Output(o)
 		if err != nil {
 			return fmt.Errorf("load scripts: %w", err)
 		}
@@ -186,10 +192,7 @@ func run(cfg winrm.Config, out *output.Printer, oneShot, scripts string) error {
 
 	if oneShot != "" {
 		o, err := client.RunPS(ctx, oneShot)
-		fmt.Print(o)
-		if !strings.HasSuffix(o, "\n") {
-			fmt.Println()
-		}
+		out.Output(o)
 		return err
 	}
 
