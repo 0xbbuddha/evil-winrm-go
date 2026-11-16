@@ -88,6 +88,8 @@ func (s *Shell) dispatch(ctx context.Context, line string) (stop bool) {
 		s.handleScript(ctx, fields[1:])
 	case "invoke-binary":
 		s.handleInvokeBinary(ctx, fields[1:])
+	case "dll-loader":
+		s.handleDLLLoader(ctx, fields[1:])
 	case "bypass-4msi":
 		s.handleBypassAMSI(ctx)
 	default:
@@ -171,6 +173,29 @@ func (s *Shell) handleInvokeBinary(ctx context.Context, args []string) {
 	}
 }
 
+func (s *Shell) handleDLLLoader(ctx context.Context, args []string) {
+	if len(args) != 1 {
+		s.out.Warnf("usage: dll-loader <local.dll>")
+		return
+	}
+	s.out.Infof("loading %s in memory ...", args[0])
+	out, err := s.client.LoadDLL(ctx, args[0])
+	// A successful load prints "Loaded <name>...". Anything else (a bad or
+	// native DLL surfaces the .NET Load exception as text) is a failure.
+	if err == nil && strings.Contains(out, "Loaded ") {
+		s.out.Output(out)
+		return
+	}
+	msg := strings.TrimSpace(out)
+	if err != nil {
+		msg = err.Error()
+	}
+	if msg == "" {
+		msg = "no response"
+	}
+	s.out.Errorf("dll-loader failed: %s", msg)
+}
+
 func (s *Shell) handleBypassAMSI(ctx context.Context) {
 	out, err := s.client.BypassAMSI(ctx)
 	// The patch prints "AMSI patched" only if it ran to the end. Anything else
@@ -197,6 +222,7 @@ evil-winrm-go menu:
   download <remote> [local]     Download a file from the target
   script <local.ps1 | dir>      Dot-source a local script into the session
   invoke-binary <exe> [args]    Run a local .NET assembly in memory
+  dll-loader <local.dll>        Load a local .NET DLL into the session
   bypass-4msi                   Patch AMSI in the session process
   services                      List services and their binary paths
   menu                          Show this menu

