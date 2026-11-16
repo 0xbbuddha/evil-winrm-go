@@ -9,11 +9,15 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
-// chunkSize bounds how many base64 characters ride in a single Add-Content call
-// during uploads, keeping each WinRM command well under the command-line limit.
-const chunkSize = 3000
+// chunkSize bounds how many base64 characters ride in a single Add-Content
+// call during uploads. Each command is sent as powershell -EncodedCommand,
+// i.e. base64 of its UTF-16 form, which inflates it by about 2.7x, so the
+// value must stay low enough that the encoded command clears the ~8191-char
+// cmd.exe limit even with a long remote path.
+const chunkSize = 2048
 
 // downloadChunk bounds how many raw bytes are read per Download request, so a
 // large file is streamed in pieces instead of one huge base64 response.
@@ -135,7 +139,7 @@ func (c *Client) Download(ctx context.Context, remote, local string) error {
 
 // Upload reads local and writes it to remote by streaming base64 chunks into a
 // temporary file, then decoding it server-side.
-func (c *Client) Upload(ctx context.Context, local, remote string) error {
+func (c *Client) Upload(ctx context.Context, local, remote string) (err error) {
 	data, err := os.ReadFile(local)
 	if err != nil {
 		return fmt.Errorf("read local file: %w", err)
@@ -150,6 +154,17 @@ func (c *Client) Upload(ctx context.Context, local, remote string) error {
 		return err
 	}
 	tmp := dst + "." + hex.EncodeToString(n) + ".b64"
+
+	// On any failure after this point the temp file may already exist on the
+	// target; drop it so a broken upload leaves nothing behind. Best effort on
+	// a fresh context, since the original one may be the reason we failed.
+	defer func() {
+		if err != nil {
+			rm, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			_, _, _, _ = c.run(rm, fmt.Sprintf("Remove-Item -LiteralPath %s -Force -ErrorAction SilentlyContinue", psQuote(tmp)))
+			cancel()
+		}
+	}()
 
 	// Start from a clean temp file.
 	if _, stderr, _, err := c.run(ctx, fmt.Sprintf("Remove-Item -LiteralPath %s -ErrorAction SilentlyContinue", psQuote(tmp))); err != nil {
