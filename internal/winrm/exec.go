@@ -7,12 +7,17 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
 // chunkSize bounds how many base64 characters ride in a single Add-Content call
 // during uploads, keeping each WinRM command well under the command-line limit.
 const chunkSize = 3000
+
+// downloadChunk bounds how many raw bytes are read per Download request, so a
+// large file is streamed in pieces instead of one huge base64 response.
+const downloadChunk = 1 << 20 // 1 MiB
 
 // InitPath queries the remote working directory and stores it as the shell's
 // current location. Like the Ruby and Python evil-winrm shells, it starts in
@@ -76,14 +81,15 @@ func (c *Client) runPSOnce(ctx context.Context, userCmd string) (string, error) 
 	return out, nil
 }
 
-// Download fetches remote and writes it to local. The file is transferred as
-// base64 to survive the text-only WinRM channel.
+// Download fetches remote and writes it to local. The file is read in byte
+// ranges, each returned as base64, so a large file does not force the whole
+// content into memory on either side or into a single WinRM response.
 func (c *Client) Download(ctx context.Context, remote, local string) error {
-	ps := fmt.Sprintf(
-		"if (Test-Path -LiteralPath %[1]s -PathType Leaf) { [Console]::Out.Write([Convert]::ToBase64String([IO.File]::ReadAllBytes(%[1]s))) } else { [Console]::Error.Write('NOFILE') }",
-		psQuote(c.absRemote(remote)),
-	)
-	stdout, stderr, _, err := c.run(ctx, ps)
+	rp := c.absRemote(remote)
+	stdout, stderr, _, err := c.run(ctx, fmt.Sprintf(
+		"if (Test-Path -LiteralPath %[1]s -PathType Leaf) { (Get-Item -LiteralPath %[1]s).Length } else { [Console]::Error.Write('NOFILE') }",
+		psQuote(rp),
+	))
 	if err != nil {
 		return err
 	}
@@ -93,11 +99,38 @@ func (c *Client) Download(ctx context.Context, remote, local string) error {
 	if stderr != "" {
 		return fmt.Errorf("remote error: %s", strings.TrimSpace(stderr))
 	}
-	data, err := base64.StdEncoding.DecodeString(stripSpace(stdout))
+	size, err := strconv.ParseInt(strings.TrimSpace(stdout), 10, 64)
 	if err != nil {
-		return fmt.Errorf("decode remote content: %w", err)
+		return fmt.Errorf("remote file size: %w", err)
 	}
-	return os.WriteFile(local, data, 0o600)
+
+	f, err := os.OpenFile(local, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	for off := int64(0); off < size; off += downloadChunk {
+		ps := fmt.Sprintf(
+			"$fs=[IO.File]::OpenRead(%s);$fs.Position=%d;$b=New-Object byte[] %d;$n=$fs.Read($b,0,%[3]d);$fs.Close();[Console]::Out.Write([Convert]::ToBase64String($b,0,$n))",
+			psQuote(rp), off, downloadChunk,
+		)
+		stdout, stderr, _, err := c.run(ctx, ps)
+		if err != nil {
+			return err
+		}
+		if stderr != "" {
+			return fmt.Errorf("remote error: %s", strings.TrimSpace(stderr))
+		}
+		data, err := base64.StdEncoding.DecodeString(stripSpace(stdout))
+		if err != nil {
+			return fmt.Errorf("decode remote content: %w", err)
+		}
+		if _, err := f.Write(data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Upload reads local and writes it to remote by streaming base64 chunks into a
