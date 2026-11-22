@@ -46,6 +46,7 @@ func main() {
 		threads  = flag.Int("threads", 8, "parallel connections for -targets")
 		scripts  = flag.String("s", "", "local .ps1 file or directory to dot-source after connect")
 		logFile  = flag.String("l", "", "append the session transcript to a file")
+		psrp     = flag.Bool("psrp", false, "use MS-PSRP (PowerShell Remoting) instead of WinRS")
 		kerberos = flag.Bool("kerberos", false, "authenticate with Kerberos")
 		realm    = flag.String("realm", "", "Kerberos realm")
 		spn      = flag.String("spn", "", "Kerberos SPN (default HTTP/<host>)")
@@ -97,6 +98,7 @@ func main() {
 		Domain:    *domain,
 		CACert:    ca,
 		Timeout:   180 * time.Second,
+		PSRP:      *psrp,
 		Kerberos:  *kerberos,
 		Realm:     *realm,
 		SPN:       *spn,
@@ -168,6 +170,10 @@ func run(cfg winrm.Config, out *output.Printer, oneShot, scripts string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	if cfg.PSRP {
+		return runPSRP(ctx, cfg, out, oneShot)
+	}
+
 	client, err := winrm.New(cfg)
 	if err != nil {
 		return err
@@ -211,6 +217,25 @@ func run(cfg winrm.Config, out *output.Printer, oneShot, scripts string) error {
 	}
 	defer sh.Close()
 	return sh.Run(ctx)
+}
+
+// runPSRP opens a PSRP runspace and runs the one-shot command. The interactive
+// shell and the menu built-ins are not wired to PSRP yet.
+func runPSRP(ctx context.Context, cfg winrm.Config, out *output.Printer, oneShot string) error {
+	out.Infof("connecting to %s:%d (psrp)", cfg.Host, cfg.Port)
+	sess, err := winrm.OpenPSRP(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("%s", winrm.Explain(err))
+	}
+	defer sess.Close()
+	out.Successf("runspace opened")
+
+	if oneShot == "" {
+		return fmt.Errorf("psrp currently supports one-shot only; pass -c <command>")
+	}
+	o, err := sess.Execute(ctx, oneShot)
+	out.Output(o)
+	return err
 }
 
 // runTargets runs command on every host in the file, several at a time.

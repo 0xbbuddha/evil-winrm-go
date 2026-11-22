@@ -35,6 +35,7 @@ type Config struct {
 	Domain   string
 	CACert   []byte
 	Timeout  time.Duration
+	PSRP     bool // use MS-PSRP (PowerShell Remoting) instead of WinRS command execution
 
 	// Kerberos. Set Kerberos, or just CCache, to select this mode.
 	Kerberos  bool
