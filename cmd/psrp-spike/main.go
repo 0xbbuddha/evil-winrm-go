@@ -18,6 +18,8 @@ func main() {
 	user := flag.String("u", "", "username")
 	pass := flag.String("p", "", "password")
 	hash := flag.String("H", "", "NT hash")
+	cmd := flag.String("c", "whoami", "script to run")
+	cmd2 := flag.String("c2", "", "second script (same runspace)")
 	flag.Parse()
 
 	cfg := winrm.Config{
@@ -38,5 +40,21 @@ func main() {
 		os.Exit(1)
 	}
 	defer sess.Close()
-	fmt.Println("runspace opened, ShellId:", sess.ShellID())
+	fmt.Fprintln(os.Stderr, "runspace opened, ShellId:", sess.ShellID())
+
+	out, err := sess.Execute(ctx, *cmd)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "execute error:", err)
+		os.Exit(1)
+	}
+	fmt.Print(out)
+
+	if *cmd2 != "" {
+		out2, err := sess.Execute(ctx, *cmd2)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "execute2 error:", err)
+			os.Exit(1)
+		}
+		fmt.Print(out2)
+	}
 }
