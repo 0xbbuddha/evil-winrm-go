@@ -230,12 +230,18 @@ func runPSRP(ctx context.Context, cfg winrm.Config, out *output.Printer, oneShot
 	defer sess.Close()
 	out.Successf("runspace opened")
 
-	if oneShot == "" {
-		return fmt.Errorf("psrp currently supports one-shot only; pass -c <command>")
+	if oneShot != "" {
+		o, err := sess.Execute(ctx, oneShot)
+		out.Output(o)
+		return err
 	}
-	o, err := sess.Execute(ctx, oneShot)
-	out.Output(o)
-	return err
+
+	sh, err := shell.New(sess, out)
+	if err != nil {
+		return err
+	}
+	defer sh.Close()
+	return sh.Run(ctx)
 }
 
 // runTargets runs command on every host in the file, several at a time.

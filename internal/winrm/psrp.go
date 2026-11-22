@@ -86,7 +86,49 @@ type PSRPSession struct {
 	pool    *psrprs.Pool
 	shellID string
 	msgID   uint64
+	cwd     string
 }
+
+// errPSRPTODO marks a shell built-in not yet ported to the PSRP path.
+var errPSRPTODO = fmt.Errorf("not implemented on PSRP yet")
+
+// RunPS runs cmd and refreshes the tracked working directory so the prompt
+// follows cd. shortcut: one extra round-trip per command to read the location;
+// fold it into the command pipeline if it shows up in latency.
+func (s *PSRPSession) RunPS(ctx context.Context, cmd string) (string, error) {
+	out, err := s.Execute(ctx, cmd)
+	if err == nil {
+		s.refreshCWD(ctx)
+	}
+	return out, err
+}
+
+func (s *PSRPSession) refreshCWD(ctx context.Context) {
+	if p, err := s.Execute(ctx, "(Get-Location).Path"); err == nil {
+		s.cwd = strings.TrimSpace(p)
+	}
+}
+
+// Path returns the tracked remote working directory.
+func (s *PSRPSession) Path() string {
+	if s.cwd == "" {
+		return "PS"
+	}
+	return s.cwd
+}
+
+// The file and in-memory built-ins are not ported to PSRP yet.
+func (s *PSRPSession) Upload(context.Context, string, string) error        { return errPSRPTODO }
+func (s *PSRPSession) Download(context.Context, string, string) error      { return errPSRPTODO }
+func (s *PSRPSession) LoadScripts(context.Context, string) (string, error) { return "", errPSRPTODO }
+func (s *PSRPSession) InvokeBinary(context.Context, string, []string) (string, error) {
+	return "", errPSRPTODO
+}
+func (s *PSRPSession) BypassAMSI(context.Context) (string, error)      { return "", errPSRPTODO }
+func (s *PSRPSession) LoadDLL(context.Context, string) (string, error) { return "", errPSRPTODO }
+
+// Complete has no remote completion on PSRP yet.
+func (s *PSRPSession) Complete(context.Context, string) ([]string, error) { return nil, nil }
 
 // OpenPSRP opens a RunspacePool: it sends the PSRP handshake fragments as the
 // creationXml of a sealed WSMan Create, then reads the pool-opened messages.
@@ -124,6 +166,7 @@ func OpenPSRP(ctx context.Context, cfg Config) (*PSRPSession, error) {
 		s.Close()
 		return nil, fmt.Errorf("open runspace pool: %w", err)
 	}
+	s.refreshCWD(ctx)
 	return s, nil
 }
 
