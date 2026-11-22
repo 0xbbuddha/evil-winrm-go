@@ -20,6 +20,9 @@ func main() {
 	hash := flag.String("H", "", "NT hash")
 	cmd := flag.String("c", "whoami", "script to run")
 	cmd2 := flag.String("c2", "", "second script (same runspace)")
+	ssl := flag.Bool("S", false, "HTTPS")
+	cert := flag.String("cert", "", "client cert PEM")
+	key := flag.String("key", "", "client key PEM")
 	flag.Parse()
 
 	cfg := winrm.Config{
@@ -28,6 +31,9 @@ func main() {
 		Username: *user,
 		Password: *pass,
 		Hash:     *hash,
+		HTTPS:    *ssl,
+		CertFile: *cert,
+		KeyFile:  *key,
 		Insecure: true,
 		Timeout:  60 * time.Second,
 	}

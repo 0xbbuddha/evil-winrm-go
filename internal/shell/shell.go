@@ -13,31 +13,18 @@ import (
 	"github.com/chzyer/readline"
 
 	"github.com/0xbbuddha/evil-winrm-go/internal/output"
+	"github.com/0xbbuddha/evil-winrm-go/internal/winrm"
 )
 
 // Shell holds the state of an interactive session.
-// Session is the remote session the shell drives. Both the WinRS client and the
-// PSRP session satisfy it.
-type Session interface {
-	RunPS(ctx context.Context, cmd string) (string, error)
-	Path() string
-	Upload(ctx context.Context, local, remote string) error
-	Download(ctx context.Context, remote, local string) error
-	LoadScripts(ctx context.Context, path string) (string, error)
-	InvokeBinary(ctx context.Context, local string, args []string) (string, error)
-	BypassAMSI(ctx context.Context) (string, error)
-	LoadDLL(ctx context.Context, local string) (string, error)
-	Complete(ctx context.Context, token string) ([]string, error)
-}
-
 type Shell struct {
-	client Session
+	client *winrm.Client
 	out    *output.Printer
 	rl     *readline.Instance
 }
 
 // New creates a Shell bound to a connected client.
-func New(client Session, out *output.Printer) (*Shell, error) {
+func New(client *winrm.Client, out *output.Printer) (*Shell, error) {
 	rl, err := readline.NewEx(&readline.Config{
 		HistoryFile:            "/tmp/.evil-winrm-go_history",
 		InterruptPrompt:        "^C",

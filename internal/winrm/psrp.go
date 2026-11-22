@@ -8,14 +8,20 @@ package winrm
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/google/uuid"
+	krbclient "github.com/jcmturner/gokrb5/v8/client"
+	krbconfig "github.com/jcmturner/gokrb5/v8/config"
+	krbcred "github.com/jcmturner/gokrb5/v8/credentials"
+	"github.com/jcmturner/gokrb5/v8/spnego"
 	"github.com/smnsjas/go-psrpcore/messages"
 	psrppipe "github.com/smnsjas/go-psrpcore/pipeline"
 	psrprs "github.com/smnsjas/go-psrpcore/runspace"
@@ -75,76 +81,161 @@ func sealedHTTPClient(cfg Config, conns *connSet) *http.Client {
 	return &http.Client{Transport: &pthRoundTripper{base: base}}
 }
 
+// psrpTransport builds the HTTP client and the per-request auth applier for the
+// configured mode. NTLM and pass-the-hash seal a pinned connection; certificate
+// auth uses a TLS client certificate over HTTPS and carries no HTTP credentials.
+func psrpTransport(cfg Config, conns *connSet) (*http.Client, func(*http.Request) error, string, error) {
+	mode, err := cfg.authMode()
+	if err != nil {
+		return nil, nil, "", err
+	}
+	switch mode {
+	case authCert:
+		client, cerr := certHTTPClient(cfg, conns)
+		if cerr != nil {
+			return nil, nil, "", cerr
+		}
+		// WinRM certificate auth is signalled by this fixed Authorization value;
+		// the actual authentication is the TLS client certificate.
+		return client, func(r *http.Request) error {
+			r.Header.Set("Authorization", "http://schemas.dmtf.org/wbem/wsman/1/wsman/secprofile/https/mutual")
+			return nil
+		}, cfg.Username, nil
+	case authKerberos:
+		// shortcut: Kerberos rides SPNEGO over HTTPS (TLS carries encryption);
+		// plain-HTTP GSS message sealing is not implemented, so HTTPS is required.
+		if !cfg.HTTPS {
+			return nil, nil, "", fmt.Errorf("kerberos on PSRP requires HTTPS (-S); plain-HTTP sealing is not implemented")
+		}
+		cl, spn, kerr := kerbClient(cfg)
+		if kerr != nil {
+			return nil, nil, "", kerr
+		}
+		apply := func(r *http.Request) error { return spnego.SetSPNEGOHeader(cl, r, spn) }
+		return plainTLSClient(cfg, conns), apply, cfg.Username, nil
+	default: // authNTLM, authHash
+		user, secret, aerr := psrpAuth(cfg)
+		if aerr != nil {
+			return nil, nil, "", aerr
+		}
+		return sealedHTTPClient(cfg, conns), func(r *http.Request) error { r.SetBasicAuth(user, secret); return nil }, user, nil
+	}
+}
+
+// plainTLSClient is an HTTPS client with no HTTP-layer auth (used by Kerberos,
+// which authenticates with a per-request SPNEGO header).
+func plainTLSClient(cfg Config, conns *connSet) *http.Client {
+	tlsCfg := &tls.Config{InsecureSkipVerify: cfg.Insecure} //nolint:gosec // operator's -k
+	if len(cfg.CACert) > 0 {
+		pool := x509.NewCertPool()
+		pool.AppendCertsFromPEM(cfg.CACert)
+		tlsCfg.RootCAs = pool
+	}
+	base := &http.Transport{
+		TLSClientConfig:     tlsCfg,
+		DialContext:         conns.DialContext,
+		MaxConnsPerHost:     1,
+		MaxIdleConnsPerHost: 1,
+	}
+	return &http.Client{Transport: base}
+}
+
+// kerbClient loads a Kerberos client from the credential cache and resolves the
+// service principal (defaulting to HTTP/<host>).
+func kerbClient(cfg Config) (*krbclient.Client, string, error) {
+	confPath := cfg.KrbConfig
+	if confPath == "" {
+		confPath = "/etc/krb5.conf"
+	}
+	conf, err := krbconfig.Load(confPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("krb5.conf: %w", err)
+	}
+	ccPath := strings.TrimPrefix(cfg.CCache, "FILE:")
+	if ccPath == "" {
+		ccPath = strings.TrimPrefix(os.Getenv("KRB5CCNAME"), "FILE:")
+	}
+	if ccPath == "" {
+		return nil, "", fmt.Errorf("kerberos needs a credential cache (-ccache or KRB5CCNAME)")
+	}
+	cc, err := krbcred.LoadCCache(ccPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("load ccache: %w", err)
+	}
+	cl, err := krbclient.NewFromCCache(cc, conf, krbclient.DisablePAFXFAST(true))
+	if err != nil {
+		return nil, "", fmt.Errorf("kerberos client: %w", err)
+	}
+	spn := cfg.SPN
+	if spn == "" {
+		spn = "HTTP/" + cfg.Host
+	}
+	return cl, spn, nil
+}
+
+// certHTTPClient builds an HTTPS client that authenticates with a TLS client
+// certificate (WinRM certificate mapping); TLS provides the encryption.
+func certHTTPClient(cfg Config, conns *connSet) (*http.Client, error) {
+	certPEM, keyPEM, err := readKeyPair(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if certPEM == nil {
+		return nil, fmt.Errorf("certificate auth needs -cert and -key")
+	}
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("client certificate: %w", err)
+	}
+	tlsCfg := &tls.Config{ //nolint:gosec // operator's -k
+		Certificates:       []tls.Certificate{pair},
+		InsecureSkipVerify: cfg.Insecure,
+		// WinRM may ask for the client cert via TLS renegotiation after the
+		// handshake, which Go's client refuses unless allowed.
+		Renegotiation: tls.RenegotiateOnceAsClient,
+	}
+	if len(cfg.CACert) > 0 {
+		pool := x509.NewCertPool()
+		pool.AppendCertsFromPEM(cfg.CACert)
+		tlsCfg.RootCAs = pool
+	}
+	base := &http.Transport{
+		TLSClientConfig:     tlsCfg,
+		DialContext:         conns.DialContext,
+		MaxConnsPerHost:     1,
+		MaxIdleConnsPerHost: 1,
+	}
+	return &http.Client{Transport: base}, nil
+}
+
 // PSRPSession is a PSRP runspace opened over WSMan.
 type PSRPSession struct {
-	cfg     Config
-	url     string
-	user    string
-	secret  string
-	conns   *connSet
-	client  *http.Client
-	pool    *psrprs.Pool
-	shellID string
-	msgID   uint64
-	cwd     string
+	cfg       Config
+	url       string
+	user      string
+	conns     *connSet
+	client    *http.Client
+	authApply func(*http.Request) error // sets per-request auth (Basic for NTLM/PtH; SPNEGO for Kerberos; none for cert)
+	pool      *psrprs.Pool
+	shellID   string
+	msgID     uint64
 }
-
-// errPSRPTODO marks a shell built-in not yet ported to the PSRP path.
-var errPSRPTODO = fmt.Errorf("not implemented on PSRP yet")
-
-// RunPS runs cmd and refreshes the tracked working directory so the prompt
-// follows cd. shortcut: one extra round-trip per command to read the location;
-// fold it into the command pipeline if it shows up in latency.
-func (s *PSRPSession) RunPS(ctx context.Context, cmd string) (string, error) {
-	out, err := s.Execute(ctx, cmd)
-	if err == nil {
-		s.refreshCWD(ctx)
-	}
-	return out, err
-}
-
-func (s *PSRPSession) refreshCWD(ctx context.Context) {
-	if p, err := s.Execute(ctx, "(Get-Location).Path"); err == nil {
-		s.cwd = strings.TrimSpace(p)
-	}
-}
-
-// Path returns the tracked remote working directory.
-func (s *PSRPSession) Path() string {
-	if s.cwd == "" {
-		return "PS"
-	}
-	return s.cwd
-}
-
-// The file and in-memory built-ins are not ported to PSRP yet.
-func (s *PSRPSession) Upload(context.Context, string, string) error        { return errPSRPTODO }
-func (s *PSRPSession) Download(context.Context, string, string) error      { return errPSRPTODO }
-func (s *PSRPSession) LoadScripts(context.Context, string) (string, error) { return "", errPSRPTODO }
-func (s *PSRPSession) InvokeBinary(context.Context, string, []string) (string, error) {
-	return "", errPSRPTODO
-}
-func (s *PSRPSession) BypassAMSI(context.Context) (string, error)      { return "", errPSRPTODO }
-func (s *PSRPSession) LoadDLL(context.Context, string) (string, error) { return "", errPSRPTODO }
-
-// Complete has no remote completion on PSRP yet.
-func (s *PSRPSession) Complete(context.Context, string) ([]string, error) { return nil, nil }
 
 // OpenPSRP opens a RunspacePool: it sends the PSRP handshake fragments as the
 // creationXml of a sealed WSMan Create, then reads the pool-opened messages.
 func OpenPSRP(ctx context.Context, cfg Config) (*PSRPSession, error) {
-	user, secret, err := psrpAuth(cfg)
+	conns := &connSet{}
+	client, authApply, user, err := psrpTransport(cfg, conns)
 	if err != nil {
 		return nil, err
 	}
-	conns := &connSet{}
 	s := &PSRPSession{
-		cfg:    cfg,
-		url:    endpointURL(cfg.Host, cfg.Port, cfg.HTTPS),
-		user:   user,
-		secret: secret,
-		conns:  conns,
-		client: sealedHTTPClient(cfg, conns),
+		cfg:       cfg,
+		url:       endpointURL(cfg.Host, cfg.Port, cfg.HTTPS),
+		user:      user,
+		conns:     conns,
+		client:    client,
+		authApply: authApply,
 	}
 
 	transport := &wsmanRW{sess: s, commandID: ""}
@@ -166,7 +257,6 @@ func OpenPSRP(ctx context.Context, cfg Config) (*PSRPSession, error) {
 		s.Close()
 		return nil, fmt.Errorf("open runspace pool: %w", err)
 	}
-	s.refreshCWD(ctx)
 	return s, nil
 }
 
@@ -369,7 +459,11 @@ func (s *PSRPSession) post(ctx context.Context, body string) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/soap+xml;charset=UTF-8")
-	req.SetBasicAuth(s.user, s.secret)
+	if s.authApply != nil {
+		if err := s.authApply(req); err != nil {
+			return nil, fmt.Errorf("auth: %w", err)
+		}
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("psrp post: %w", err)

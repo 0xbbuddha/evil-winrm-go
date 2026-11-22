@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/0xbbuddha/evil-winrm-go/internal/winrm"
 )
 
 var builtins = []string{"upload", "download", "script", "invoke-binary", "dll-loader", "bypass-4msi", "services", "menu", "exit", "quit", "cd"}
@@ -14,7 +16,7 @@ var builtins = []string{"upload", "download", "script", "invoke-binary", "dll-lo
 // completer finishes command names, local paths for upload/script, and remote
 // paths for everything else that looks like a filesystem argument.
 type completer struct {
-	client Session
+	client *winrm.Client
 }
 
 func (c *completer) Do(line []rune, pos int) ([][]rune, int) {
